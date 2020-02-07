@@ -5,6 +5,6 @@
 In this project we build a classifier for DNA sequences without using any outside ML/Data Science libraries. 
 
 ## Contents
-- [./start.py](Script) with our SVM class and main function.
-- The small [./data/](Data) files containing training sequences, labels, and test sequences. 
+- [Script](./start.py) with our SVM class and main function.
+- [Data](./data/) files containing training sequences, labels, and test sequences. 
 
