@@ -1,140 +1,213 @@
 import pandas as pd
 import numpy as np
-import altair as alt
-from termcolor import colored
+import itertools
+import random
+# module for quadratic programming 
+import cvxopt
+# module for counting k-mers
+from sklearn.feature_extraction.text import CountVectorizer
 
-MAX_ETA = 0.25
-NITER = 1000
-DATA_MAP = {'G':1 , 'A':2 ,'C':3,'T':4}
-def get_data(path = './data/'):
+# upload raw data from csv
+def get_raw_data(path = './data/'):
     for i in range(3):
         train = pd.read_csv(path+'Xtr'+str(i)+'.csv') if i==0 else pd.concat([train,pd.read_csv(path+'Xtr'+str(i)+'.csv')])
         test = pd.read_csv(path+'Xte'+str(i)+'.csv') if i==0 else pd.concat([test,pd.read_csv(path+'Xte'+str(i)+'.csv')])
-        labs = pd.read_csv(path+'Ytr'+str(i)+'.csv') if i==0 else pd.concat([labs,pd.read_csv(path+'Ytr'+str(i)+'.csv')])
-    train = pd.merge(train, labs)
+        labels = pd.read_csv(path+'Ytr'+str(i)+'.csv') if i==0 else pd.concat([labels,pd.read_csv(path+'Ytr'+str(i)+'.csv')])
+    train = pd.merge(train, labels)
     return train, test
 
-def seq_distrib(series):
-    dic = {}
-    for item in series:
-        for sub in item:
-            if sub in dic:
-                dic[sub] += 1
-                continue
-            dic[sub] = 1
-    return dic
+# shuffle and split data for train and validation 75/25
+def split_data(data, labels, train_size=1499):
+    #random.seed(0) 
+    temp = list(zip(data, labels))
+    random.shuffle(temp)
+    data, labels = zip(*temp)
+    return data[ : train_size], labels[ : train_size], data[train_size : ], labels[train_size : ]
 
-class SVM:
-    def __init__(self, learning_rate = 0.01, regularizer = 0.01, iterations = 1000):
-        self.eta = learning_rate if isinstance(learning_rate, list) else [learning_rate] * iterations
-        self.regularizer = regularizer
-        self.niter = iterations
-
-    @staticmethod
-    def to_numeric(seq):
-        return [DATA_MAP[x] for x in seq]
-
-    def linear_model(self, x):
-        return np.dot(self.W, x) - self.b
-
-    def hinge(self, x,y):
-        if y * self.linear_model(x) >= 1:
-            return 1
-        return 0
-
-    def total(self):
-        loss = 0
-        for n in range(len(self.X)):
-            loss += hinge(self.X[i], self.Y[i])
-        return loss / len(self.Y)
-
-    def fit(self, data, labels):
-        '''Initialize samples X, labels Y, weights W and bias b'''
-        self.X = np.array([self.to_numeric(x) for x in data])
-        n_samples, n_features = self.X.shape
-        self.Y = np.where(np.array(labels) <=0,-1,1)
-        self.W = np.zeros(n_features)
-        self.b = 0
-
-        for i in range(self.niter):
-            # if i%100==0:
-            #     print("Iteration {}".format(i))
-            for idi,xi in enumerate(self.X):
-                if self.hinge(xi, self.Y[idi]):
-                    self.W -= self.eta[i] * (2 * self.regularizer * self.W)
-                else:
-                    self.W -= self.eta[i] * (2 * self.regularizer * self.W - np.dot(xi, self.Y[idi]))
-                    self.b -= self.eta[i] * self.Y[idi]
-
-    @staticmethod
-    def reformat(p):
-        for i in range(len(p)):
-            if p[i]<0:
-                p[i] = 0
-            else:
-                p[i] = 1
-        return p
-
-    def predict(self,samples):
-        predictions = []
-        samples = np.array([self.to_numeric(x) for x in samples])
-        for xi in samples:
-            predictions.append(np.sign(self.linear_model(xi)))
-        return self.reformat(predictions)
-
-def split_data(data, labels):
-    return data[:4999], labels[:4999], data[4999:], labels[4999:]
-
-def batches(svm, tr, lab, n_batches = 5):
-    for i in range(n_batches):
-        print(colored('Batch {}'.format(i+1),'magenta'))
-        svm.fit(tr, lab)
-    return svm
-
-def save_results(ids, bounds, name = 'Yte.csv'):
-    print(colored('Saving results in {}'.format(name),'green'))
-    df = pd.DataFrame()
-    df['Id'] = ids
-    df['Bound'] = bounds
-    df.to_csv(name, index = False)
-
-def accuracy(predicted, truth):
+# reformat labels (-1,1) -> (0,1)
+def reformat_labels(p):
+    for i in range(len(p)):
+        if p[i]<0:
+            p[i] = 0
+        else:
+            p[i] = 1
+    return p
+    
+# compute binary classification accuracy
+def compute_accuracy(predicted, truth):
     num_wrong = 0
     for p,t in zip(predicted,truth):
         if p!=t:
             num_wrong += 1
-    print(colored("pct wrong is {}".format(accuracy := (num_wrong / len(predicted))),'cyan'))
-    return accuracy
+    accuracy = num_wrong / len(predicted)
+    print("Accuracy is {0:.5f}".format(1 - accuracy))
+    
+# save results to csv
+def save_results(ids, bounds, filename = 'Yte.csv'):
+    df = pd.DataFrame()
+    df['Id'] = ids 
+    df['Bound'] = bounds
+    with open(filename, 'a') as f:
+        df.to_csv(f, mode='a', index = False, header=f.tell()==0)
 
+# create vocabulary of K-mers 
+def create_vocabulary(dictionary, kmer_size):
+    vectorizer = CountVectorizer(analyzer='char', ngram_range=(kmer_size, kmer_size))
+    vectorizer.fit_transform(dictionary)
+    return vectorizer
+    
+# preprocess data w.r.t vocabulary      
+def preprocess_data(data, labels = None, vectorizer=None, isTest=False):
+    
+    data = np.asarray(data)
+    
+    X = vectorizer.transform(data)
+    
+    if isTest:
+        return X.toarray()
+    else:
+        Y = np.array([-1. if y==0. else 1 for y in labels]).astype(float)
+        return X.toarray(),Y
+    
+# linear kernel function
+def linear_norm_kernel(x, y):
+    return np.dot(x, y.T) / np.sqrt(np.dot(x,x.T) * np.dot(y,y.T))
+
+# Gaussian kernel function
+def gaussian_kernel(x, y, gamma = 0.02):
+    return np.exp(-gamma * (np.linalg.norm(x - y) ** 2) )
+
+#SVM classifier
+class svm:
+
+    def __init__(self, C=1., kernel=gaussian_kernel, threshold=1e-11):
+        
+        self.C = C
+        self.threshold = threshold
+        self.kernel = kernel
+
+
+    def compute_kernel(self,X, X_):
+        
+        self.n_samples = X.shape[0]
+
+        K = np.zeros((self.n_samples, X_.shape[0]))
+        
+        for i in range(self.n_samples):
+            for j in range(X_.shape[0]):
+                K[i,j] = self.kernel(X[i], X_[j])
+                
+        self.K = K
+        
+    def fit(self,X,Y):
+        
+        self.compute_kernel(X, X)
+        
+        P = Y * Y.T * self.K
+        q = - np.ones((self.n_samples, 1))
+        G = np.concatenate((np.eye(self.n_samples), - np.eye(self.n_samples)))
+        h = np.concatenate((self.C * np.ones((self.n_samples,1)),np.zeros((self.n_samples, 1))))
+        A = Y.reshape(1, self.n_samples)
+        b = 0.0
+
+        # Solve QP problem
+        solution = cvxopt.solvers.qp(cvxopt.matrix(P),cvxopt.matrix(q),cvxopt.matrix(G),
+                                cvxopt.matrix(h), cvxopt.matrix(A), cvxopt.matrix(b))
+        # Lagrange multipliers
+        lambdas = np.array(solution['x'])
+
+        self.sup_vec = np.where(lambdas > self.threshold)[0]
+        self.num_vec = len(self.sup_vec)
+        self.X = X[self.sup_vec,:]
+        self.lambdas = lambdas[self.sup_vec]
+        self.Y = Y[self.sup_vec]
+        self.b = np.sum(self.Y)
+        for n in range(self.num_vec):
+            self.b -= np.sum(self.lambdas * self.Y * np.reshape(self.K[self.sup_vec[n], self.sup_vec],(self.num_vec, 1)))
+        self.b /= len(self.lambdas)
+        
+        print(self.num_vec, "support vectors")
+            
+    def predict(self,X):
+        
+        self.compute_kernel(X, self.X)       
+   
+        self.y = np.zeros((self.n_samples,1))
+        for j in range(self.n_samples):
+            for i in range(self.num_vec):
+                self.y[j] += self.lambdas[i] * self.Y[i] * self.K[j,i]
+            self.y[j] += self.b
+
+        return np.sign(self.y).reshape((1,-1))[0]
+
+      
+    
+###TODO###    
+def tuning_parameters(data, K=None, kernel=None, C=None, threshold=None,):
+    
+    train, test = get_raw_data()
+    
+    vectorizer = create_vocabulary(train['seq'], K)
+    
+    tr,tr_lab, val,val_lab = split_data(data['seq'], data['Bound'], train_size=4999)
+
+    print("Preprocessing training data...")
+    X_train, Y_train =  preprocess_data(tr,
+                                        labels=tr_lab,
+                                        vectorizer=vectorizer)
+    print("Training SVM...")
+    clf = svm(C=C, kernel=kernel, threshold=threshold)
+    clf.fit(X_train,Y_train.reshape((-1,1)))
+    print("Preprocessing validation data...")
+    X_val = preprocess_data(val, vectorizer=vectorizer, isTest=True)
+    
+    print(X_val.shape)
+    print(X_val[0])
+    
+    print("Predicting validation labels...")
+    prediction = clf.predict(X_val)
+    prediction = reformat_labels(prediction)
+    compute_accuracy(prediction, val_lab)
+
+    
 def main():
-    '''Initialize eta to decay, and all options for regularization parameters '''
-    etas = list(np.arange(MAX_ETA,0,-1*(MAX_ETA / NITER)))
-    regs = list(np.arange(1,0,-1*(1 / 15)))
-    '''Get all data, split training into train/validate '''
-    tr, te = get_data()
-    # tr,trlab,val,vallab = split_data(tr['seq'],tr['Bound'])
-    #
-    # '''Run linear SVM 15 times, 5 batches each to find the best regularization parameter '''
-    # cur_wrong = 1
-    # which = None
-    # for i in range(15):
-    #     svm = SVM(learning_rate = etas, regularizer = regs[i])
-    #     svm = batches(svm,tr,trlab)
-    #     pct_wrong = accuracy(svm.predict(val),vallab)
-    #     if pct_wrong <= cur_wrong:
-    #         cur_wrong = pct_wrong
-    #         which = i
-    #         print(colored('Updating the best perorming svm','yellow'))
-    #
-    # print("Best performer is index {}, reg = {}".format(which, regs[which]))
-    # print(colored('Training new SVM using all data with reg = {}'.format(regs[which]),'green'))
+    
+    #tuning_parameters(train, K=3, kernel=gaussian_kernel,  C=1, threshold=1e-11)
+    
+    train, test = get_raw_data()
+    
+    I = [0, 1, 2]  
+    offsets = [0, 2000, 4000]
+    K = [8, 8, 8]
+    C = [1., 1., 1.]
+    
+    for i, offset, k, c in zip(I, offsets, K, C):
+        offset_train = offset
+        offset_test = int(offset / 2)
+        size_train = 2000
+        size_test = 1000
+        
+        vectorizer = create_vocabulary(train['seq'].append(test['seq']), k)
+        
+        print("####################DATASET:{}####################".format(i))
+        print("Preprocessing training data...")
+        X_train, Y_train =  preprocess_data(train['seq'][offset_train : offset_train + size_train], 
+                                            labels=train['Bound'][offset_train : offset_train + size_train], 
+                                            vectorizer=vectorizer)
+        print("Preprocessing is finished!")
+        print("Training SVM...")
+        clf = svm(C=c, kernel=gaussian_kernel, threshold=1e-11)
+        clf.fit(X_train,Y_train.reshape((-1,1)))
+        print("Training is finished!")
 
-    '''Finally, train an SVM on all training data using the best performing regularization parameter'''
-    final_svm = SVM(learning_rate = etas,regularizer = regs[-1])
-    final_svm = batches(final_svm, tr['seq'],tr['Bound'])
-    predictions = final_svm.predict(te['seq'])
-    save_results(te['Id'],predictions)
-
+        print("Preprocessing test data...")
+        X_test = preprocess_data(test['seq'][offset_test : offset_test + size_test], vectorizer=vectorizer, isTest=True)
+        print("Preprocessing is finished!")
+        print("Predicting test labels...")
+        prediction = clf.predict(X_test)
+        prediction = reformat_labels(prediction)
+        save_results(test['Id'][offset_test : offset_test + size_test], prediction.astype(int))
+        print("Results are saved in Yte.csv!")
 
 if __name__=='__main__':
     main()
