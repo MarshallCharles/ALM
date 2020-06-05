@@ -2,9 +2,10 @@
 ### Advanced Learning Models - a MOSIG-MSIAM M2 course
 ### Charles Marshall, Pavel Fedosov
 
-In this project we build a classifier for DNA sequences without using any outside ML/Data Science libraries. 
+In this project we build a classifier for DNA sequences from scratch.  
 
 ## Contents
-- [Script](./start.py) with our SVM class and main function.
+- [Submitted Start Script](./start.py) The main script submitted for the challenge
+- [Original SVM](./original_svm.py) Our baseline implementation
 - [Data](./data/) files containing training sequences, labels, and test sequences. 
 
