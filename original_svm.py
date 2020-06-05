@@ -17,8 +17,8 @@ def get_raw_data(path = './data/'):
     return train, test
 
 # shuffle and split data for train and validation 75/25
-def split_data(data, labels, train_size=1499):
-    #random.seed(0) 
+def split_data(data, labels, train_size=1499, random_state=None):
+    random.seed(random_state) 
     temp = list(zip(data, labels))
     random.shuffle(temp)
     data, labels = zip(*temp)
@@ -39,8 +39,9 @@ def compute_accuracy(predicted, truth):
     for p,t in zip(predicted,truth):
         if p!=t:
             num_wrong += 1
-    accuracy = num_wrong / len(predicted)
-    print("Accuracy is {0:.5f}".format(1 - accuracy))
+    loss = num_wrong / len(predicted)
+    print("Accuracy is {0:.5f}".format(1 - loss))
+    return(1 - loss)
     
 # save results to csv
 def save_results(ids, bounds, filename = 'Yte.csv'):
@@ -73,14 +74,14 @@ def preprocess_data(data, labels = None, vectorizer=None, isTest=False):
 def linear_norm_kernel(x, y):
     return np.dot(x, y.T) / np.sqrt(np.dot(x,x.T) * np.dot(y,y.T))
 
-# Gaussian kernel function
-def gaussian_kernel(x, y, gamma = 0.02):
+# rbf kernel function
+def rbf_kernel(x, y, gamma = 0.01):
     return np.exp(-gamma * (np.linalg.norm(x - y) ** 2) )
 
 #SVM classifier
 class svm:
 
-    def __init__(self, C=1., kernel=gaussian_kernel, threshold=1e-11):
+    def __init__(self, C=1., kernel=rbf_kernel, threshold=1e-11):
         
         self.C = C
         self.threshold = threshold
@@ -125,8 +126,6 @@ class svm:
         for n in range(self.num_vec):
             self.b -= np.sum(self.lambdas * self.Y * np.reshape(self.K[self.sup_vec[n], self.sup_vec],(self.num_vec, 1)))
         self.b /= len(self.lambdas)
-        
-        print(self.num_vec, "support vectors")
             
     def predict(self,X):
         
@@ -140,73 +139,102 @@ class svm:
 
         return np.sign(self.y).reshape((1,-1))[0]
 
-      
+       
+def tuning_parameters(K=None,
+                      kernel=None,
+                      C=None,
+                      threshold=None,
+                      offset=None, # for different datasets 0:0, 1:2000, 2:4000
+                      random_states=None):
     
-###TODO###    
-def tuning_parameters(data, K=None, kernel=None, C=None, threshold=None,):
+    train_size = 1599 # size of the validation set is 1/5 of the training set (5-folds)
+    
+    size = 2000 # size of each dataset  
     
     train, test = get_raw_data()
-    
-    vectorizer = create_vocabulary(train['seq'], K)
-    
-    tr,tr_lab, val,val_lab = split_data(data['seq'], data['Bound'], train_size=4999)
 
-    print("Preprocessing training data...")
-    X_train, Y_train =  preprocess_data(tr,
-                                        labels=tr_lab,
-                                        vectorizer=vectorizer)
-    print("Training SVM...")
-    clf = svm(C=C, kernel=kernel, threshold=threshold)
-    clf.fit(X_train,Y_train.reshape((-1,1)))
-    print("Preprocessing validation data...")
-    X_val = preprocess_data(val, vectorizer=vectorizer, isTest=True)
+    vectorizer = create_vocabulary(train['seq'][offset : offset + size], K)
     
-    print(X_val.shape)
-    print(X_val[0])
+    average_accuracy = 0
     
-    print("Predicting validation labels...")
-    prediction = clf.predict(X_val)
-    prediction = reformat_labels(prediction)
-    compute_accuracy(prediction, val_lab)
+    for random_state in random_states:
+    
+        tr,tr_lab, val,val_lab = split_data(train['seq'][offset : offset + size],
+                                            train['Bound'][offset : offset + size],
+                                            train_size=train_size,
+                                            random_state=random_state)
+
+        X_train, Y_train =  preprocess_data(tr, labels=tr_lab, vectorizer=vectorizer)        
+       
+        print("Training SVM...")
+        clf = svm(C=C, kernel=kernel, threshold=threshold)
+        clf.fit(X_train,Y_train.reshape((-1,1)))
+        print("Training is finished!")
+
+        print("Predicting validation labels...")
+        X_val =  preprocess_data(val, vectorizer=vectorizer, isTest=True) 
+        prediction = clf.predict(X_val)
+        prediction = reformat_labels(prediction)
+        accuracy = compute_accuracy(prediction, val_lab)
+        
+        average_accuracy += accuracy
+
+    print('Average accuracy is : {0:.5f}'.format(average_accuracy / len(random_state)))
 
     
 def main():
+#     accuracies = []
+#     I = [0, 1, 2] 
+#     offsets = [0, 2000, 4000]
+#     K = [3, 4, 5, 6, 7, 8]
     
-    #tuning_parameters(train, K=3, kernel=gaussian_kernel,  C=1, threshold=1e-11)
+#     C = 100
+#     gamma = 0.01 # already in rbf_kernel function
+#     threshold = 1e-3
     
-    '''Combine all train and test files and put in memory''' 
+#     random_states = [0,42,17,69,324] # 5 random states for 5-folds cross-validation
+    
+    
+#     for i, offset, k in zip(I, offsets, K):
+#         print("####################DATASET: {}####################".format(i))
+#         print('k-mer: {}'.format(k))
+#         accuracies.append((k, tuning_parameters(K=k, kernel=rbf_kernel,  C=C, threshold=threshold, offset=offset, random_states=random_states)))
+  
+#     f = open("results.txt","a") 
+#     f.write(str([i, accuracies])) 
+#     f.close() 
+
+    # get the data
     train, test = get_raw_data()
     
-    I = [0, 1, 2]  
-    offsets = [0, 2000, 4000]
-    K = [8, 8, 8]
-    C = [1., 1., 1.]
-   
-    '''We will train and test in 3 batches to consider these parameters ''' 
+    # set all parameters
+    I = [0, 1, 2]  # dataset indices
+    offsets = [0, 2000, 4000] # corresponding offsets for corresponding datasets 0:0, 1:2000, 2:4000
+    K = [6, 6, 6] # sizes of the k-mers
+    C = [10, 10, 10] # C parameter, (gamma is already set in the function)
+    threshold = 1e-3 # threshold for support vectors
+    # we use rbf_kernel!
+    
+    # run the model
     for i, offset, k, c in zip(I, offsets, K, C):
         offset_train = offset
         offset_test = int(offset / 2)
         size_train = 2000
         size_test = 1000
+         
+        vectorizer = create_vocabulary(train['seq'][offset_train : offset_train + size_train].append(test['seq'][offset_test : offset_test + size_test]), k)
         
-        '''Building vocabulary of Kmers based on sequences.'''
-        vectorizer = create_vocabulary(train['seq'].append(test['seq']), k)
-        
-        '''Now we start working with the algorithm.''' 
         print("####################DATASET:{}####################".format(i))
         print("Preprocessing training data...")
-
-        '''Simply returns the data treated with the vectorizer''' 
         X_train, Y_train =  preprocess_data(train['seq'][offset_train : offset_train + size_train], 
                                             labels=train['Bound'][offset_train : offset_train + size_train], 
                                             vectorizer=vectorizer)
         print("Preprocessing is finished!")
-        
         print("Training SVM...")
-        clf = svm(C=c, kernel=gaussian_kernel, threshold=1e-11)
+        clf = svm(C=c, kernel=rbf_kernel, threshold=threshold)
         clf.fit(X_train,Y_train.reshape((-1,1)))
         print("Training is finished!")
-
+        
         print("Preprocessing test data...")
         X_test = preprocess_data(test['seq'][offset_test : offset_test + size_test], vectorizer=vectorizer, isTest=True)
         print("Preprocessing is finished!")
